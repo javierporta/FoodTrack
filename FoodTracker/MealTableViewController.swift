@@ -7,15 +7,22 @@
 //
 
 import UIKit
+import os.log
 
 class MealTableViewController: UITableViewController {
     
+    static let MealsURL = "https://www.mocky.io/v2/5dd2c5b63300004e007a3e5b"
     var meals = [Meal]()
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        loadSampleMeals()
+        // Load any saved meals, otherwise load sample data.
+        if let savedMeals = loadMeals() {
+            meals += savedMeals
+        } else {
+            loadSampleMeals()
+        }
         // Uncomment the following line to preserve selection between presentations
         // self.clearsSelectionOnViewWillAppear = false
         
@@ -103,17 +110,114 @@ class MealTableViewController: UITableViewController {
         let photo2 = UIImage(named: "meal2")
         let photo3 = UIImage(named: "meal3")
         guard let meal1 = Meal(name: "Caprese Salad", photo: photo1,
-                               rating: 4) else {
+                               rating: 4, photoUrl: nil) else {
                                 fatalError("Unable to instantiate meal1")
         }
         guard let meal2 = Meal(name: "Chicken and Potatoes", photo: photo2,
-                               rating: 5) else {
+                               rating: 5, photoUrl: nil) else {
                                 fatalError("Unable to instantiate meal2")
         }
         guard let meal3 = Meal(name: "Pasta with Meatballs", photo: photo3,
-                               rating: 3) else {
+                               rating: 3, photoUrl: nil) else {
                                 fatalError("Unable to instantiate meal2")
         }
         meals += [meal1, meal2, meal3]
     }
+    
+    fileprivate func addMeal(_ meal: Meal) {
+        // Add a new meal.
+        let newIndexPath = IndexPath(row: meals.count, section: 0)
+        meals.append(meal)
+        tableView.insertRows(at: [newIndexPath], with: .automatic)
+    }
+    
+    @IBAction func unwindToMealList(sender: UIStoryboardSegue) {
+        if let sourceViewController = sender.source as? MealViewController,
+            let meal = sourceViewController.meal {
+            addMeal(meal)
+            saveMeals()
+        }
+    }
+    
+    private func saveMeals() {
+        do {
+            let data = try NSKeyedArchiver.archivedData(withRootObject: meals, requiringSecureCoding: false)
+            try data.write(to: Meal.ArchiveURL)
+            os_log("Meals successfully saved.", log: OSLog.default, type:
+                .debug)
+        } catch {
+            os_log("Failed to save meals...", log: OSLog.default, type:
+                .error)
+        }
+    }
+    
+    private func loadMeals() -> [Meal]? {
+        do {
+            let codedData = try Data(contentsOf: Meal.ArchiveURL)
+            let meals = try NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(codedData) as? [Meal]
+            os_log("Meals successfully loaded.", log: OSLog.default, type: .debug)
+            return meals;
+        } catch {
+            os_log("Failed to load meals...", log: OSLog.default, type: .error)
+            return nil
+        }
+    }
+    
+    @IBAction func downloadAction(_ sender: UIBarButtonItem) {
+        guard let url = URL(string: MealTableViewController.MealsURL) else {
+            os_log("Invalid URL.", log: OSLog.default, type: .error)
+            return
+        }
+        
+        // download meals list from network
+        URLSession(configuration: .default).dataTask(with: url) {
+            (data, response, error) in
+            
+            if let error = error {
+                print(error.localizedDescription)
+            } else if
+                let data = data,
+                let response = response as? HTTPURLResponse,
+                response.statusCode == 200 {
+                
+                do {
+                    // parse json to [Meal]
+                    let newMeals: [Meal] = try JSONDecoder().decode([Meal].self, from: data)
+                    
+                    for meal in newMeals {
+                        if let photoURL = meal.photoUrl {
+                            
+                            // download meal’s photo
+                            URLSession(configuration: .default).dataTask(with: photoURL) {
+                                (data, response, error) in
+                                
+                                if let error = error {
+                                    print(error.localizedDescription)
+                                } else if
+                                    let data = data,
+                                    let response = response as? HTTPURLResponse,
+                                    response.statusCode == 200 {
+                                    
+                                    meal.photo = UIImage(data: data)
+                                }
+                                
+                                // add downloaded meal with photo
+                                DispatchQueue.main.async {
+                                    self.addMeal(meal)
+                                }
+                            }.resume()
+                        } else {
+                            // add downloaded meal without photo
+                            DispatchQueue.main.async {
+                                self.addMeal(meal)
+                            }
+                        }
+                    }
+                } catch let parseError as NSError {
+                    print(parseError.localizedDescription)
+                }
+            }
+        }.resume()
+    }
+    
 }
